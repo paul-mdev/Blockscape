@@ -1,6 +1,8 @@
 package blockscape;
 
 import com.jme3.asset.AssetManager;
+import com.jme3.bounding.BoundingBox;
+import com.jme3.collision.CollisionResults;
 import com.jme3.material.Material;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
@@ -10,50 +12,94 @@ import com.jme3.util.BufferUtils;
 
 import java.util.List;
 import java.util.ArrayList;
+
+import com.jme3.math.Ray;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
 
 public class Chunk extends Node {
 
     public static final int WIDTH = 16;
-    public static final int HEIGHT = 256;  // Pour commencer, on réduit la hauteur
+    public static final int HEIGHT = 64;
     public static final int DEPTH = 16;
-
+    public static final int SURFACE_LEVEL = 8;
+    
     private Block[][][] blocks;
     private AssetManager assetManager;
     private Vector3f chunk_pos;
 
-    private Geometry chunkGeometry; // Stocke la géométrie du chunk
+    private Geometry chunkGeometry;
 
     public Chunk(AssetManager assetManager, Vector3f chunk_pos) {
         this.assetManager = assetManager;
         this.chunk_pos = chunk_pos;
-
         setLocalTranslation(chunk_pos);
-
         blocks = new Block[WIDTH][HEIGHT][DEPTH];
+        GenerateChunk();
+        buildMesh();
+    }
 
+    private void GenerateChunk() {
         for (int x = 0; x < WIDTH; x++) {
             for (int y = 0; y < HEIGHT; y++) {
                 for (int z = 0; z < DEPTH; z++) {
                     Vector3f position = new Vector3f(
-                        x * Block.BLOCK_SIZE * 2,
-                        y * Block.BLOCK_SIZE * 2,
-                        z * Block.BLOCK_SIZE * 2
+                        x * Block.BLOCK_SIZE,
+                        y * Block.BLOCK_SIZE,
+                        z * Block.BLOCK_SIZE
                     );
 
-                    if (y == 0) {
+                    
+                    if (y < SURFACE_LEVEL && y > SURFACE_LEVEL - 3) {
+                        blocks[x][y][z] = new Block("dirt", assetManager, position);
+                    }
+                    
+                    else if (y == SURFACE_LEVEL) {
                         blocks[x][y][z] = new Block("grass", assetManager, position);
-                    } else {
+                    }
+                    
+                    else if ( y == (SURFACE_LEVEL + 1) && (int)(Math.random() * 50) == 1){
+                    	GenerateTree(x, y, z);
+                    }
+                    
+                    else if (y < SURFACE_LEVEL){
                         blocks[x][y][z] = new Block("stone", assetManager, position);
+                    }
+                    else {
+                    	if (isAir(x,y,z))
+                    		blocks[x][y][z] = null;
                     }
                 }
             }
         }
 
-        buildMesh();
     }
-
+    
+    private void GenerateTree(int x, int y, int z) {
+    	// Générer le tronc
+    	for (int log_y = 0; log_y < 5; log_y++ ) {
+    		System.out.println(y + log_y);
+    		if (isInsideChunk(x, y + log_y, z) && isAir(x, y + log_y,z)){
+    			blocks[x][y + log_y][z] = new Block("log", assetManager, new Vector3f(x, y + log_y, z));
+    		}	
+    	}
+    	
+    	// Générer les feuilles
+    	int leaf_height = 5;
+    	int leaf_radius = 3;
+    	for (int leaf_y = y + leaf_height; leaf_y < y + leaf_height + 5; leaf_y++) {
+	    	for (int leaf_x = x - leaf_radius; leaf_x < x + leaf_radius; leaf_x++) {
+	        	for (int leaf_z = z - leaf_radius; leaf_z < z + leaf_radius; leaf_z++) {
+	        		if (isInsideChunk(leaf_x, leaf_y, leaf_z) && isAir(leaf_x, leaf_y , leaf_z)){
+	        			blocks[leaf_x][leaf_y][leaf_z] = new Block("leaf", assetManager, new Vector3f((float)leaf_x, (float)leaf_y, (float)leaf_z));
+	        		}
+	        	}
+	    	}
+    	}
+    }
+    
+    
+    
     private boolean isInsideChunk(int x, int y, int z) {
         return x >= 0 && x < WIDTH
             && y >= 0 && y < HEIGHT
@@ -65,6 +111,8 @@ public class Chunk extends Node {
         return blocks[x][y][z] == null;
     }
 
+    
+    
     public void buildMesh() {
         if (chunkGeometry != null) {
             this.detachChild(chunkGeometry);
@@ -76,7 +124,7 @@ public class Chunk extends Node {
         List<Integer> indices = new ArrayList<>();
         List<Vector2f> texCoords = new ArrayList<>();
 
-        float s = Block.BLOCK_SIZE;
+        float s = Block.BLOCK_SIZE/2;
 
         int[] vertexCountRef = new int[]{0};
 
@@ -107,12 +155,14 @@ public class Chunk extends Node {
         mesh.updateCounts();
 
         chunkGeometry = new Geometry("ChunkMesh", mesh);
+        chunkGeometry.setModelBound(new BoundingBox());
+        chunkGeometry.updateModelBound();
+        
         Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
         mat.setTexture("ColorMap", assetManager.loadTexture("textures/atlas.png"));
         chunkGeometry.setMaterial(mat);
 
         attachChild(chunkGeometry);
-        
     }
 
     
@@ -213,10 +263,43 @@ public class Chunk extends Node {
         return null;
     }
 
-    public void setBlock(int x, int y, int z, Block block) {
-        if (!isInsideChunk(x, y, z)) return;
+    public boolean setBlock(int x, int y, int z, Block block) {
+        if (!isInsideChunk(x, y, z)) return false;
 
         blocks[x][y][z] = block;
         buildMesh();  // reconstruire le mesh à chaque changement (lent, mais simple pour commencer)
+        return true;
     }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    public Geometry getHitBlock(Vector3f origin, Vector3f direction) {
+        Ray ray = new Ray(origin, direction);
+        CollisionResults results = new CollisionResults();
+       
+        this.collideWith(ray, results);  
+
+        if (results.size() > 0) {
+            return results.getClosestCollision().getGeometry();
+        }
+        return null;
+    }
+
+    
+    
+    
+    public Geometry getChunkGeometry() {
+        return chunkGeometry;
+    }
+
+    
+    
+    
+    
 }
